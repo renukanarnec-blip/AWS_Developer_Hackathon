@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StudyPilot · Alexa+ simulator</title>
+<style>
+  :root { --ink:#16213a; --paper:#f6f8fb; --line:#d5dcea; --hi:#ffe14d; --blue:#2851d8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 "Segoe UI", system-ui, sans-serif; background:var(--paper); color:var(--ink); }
+  main { max-width:640px; margin:0 auto; padding:24px 16px 120px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; }
+  .sub { color:#5a6785; margin:0 0 20px; }
+  #log { display:flex; flex-direction:column; gap:10px; }
+  .msg { padding:10px 14px; border-radius:14px; max-width:88%; white-space:pre-wrap; }
+  .you { align-self:flex-end; background:var(--blue); color:#fff; }
+  .bot { align-self:flex-start; background:#fff; border:1px solid var(--line); }
+  .bot mark { background:var(--hi); padding:0 2px; }
+  form { position:fixed; left:0; right:0; bottom:0; background:#fff; border-top:1px solid var(--line); padding:12px; }
+  .row { max-width:640px; margin:0 auto; display:flex; gap:8px; }
+  input { flex:1; padding:12px; border:1px solid var(--line); border-radius:10px; font:inherit; }
+  button { padding:12px 18px; border:0; border-radius:10px; background:var(--ink); color:#fff; font:inherit; cursor:pointer; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 16px; }
+  .chips button { background:#fff; color:var(--ink); border:1px solid var(--line); padding:6px 12px; font-size:.9rem; }
+  :focus-visible { outline:3px solid var(--hi); outline-offset:2px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>StudyPilot</h1>
+  <p class="sub">Simulated Alexa+ talking to the MCP server at <code>/mcp/</code>.</p>
+  <div class="chips">
+    <button data-q="add Integration homework | Maths | 2026-10-12 | 60">Add a task</button>
+    <button data-q="list">What's on my list?</button>
+    <button data-q="plan 120">Plan my next 2 hours</button>
+  </div>
+  <div id="log" aria-live="polite"></div>
+</main>
+<form id="f"><div class="row">
+  <input id="q" autocomplete="off" aria-label="Message" placeholder="add title | subject | YYYY-MM-DD | minutes   ·   list   ·   plan 90   ·   done abc123">
+  <button>Send</button>
+</div></form>
+<script>
+const log = document.getElementById("log");
+function say(text, cls) { const d = document.createElement("div"); d.className = "msg " + cls; d.textContent = text; log.append(d); d.scrollIntoView(); }
+
+// Calls an MCP tool over Streamable HTTP (JSON-RPC 2.0)
+async function callTool(name, args) {
+  const r = await fetch("/mcp/", { method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name, arguments: args } }) });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message);
+  return j.result.structuredContent?.result ?? j.result.structuredContent ?? JSON.parse(j.result.content[0].text);
+}
+
+const fmt = t => `[${t.id}] ${t.title} (${t.subject}) · due ${t.due_date} · ${t.est_minutes} min${t.done ? " ✓" : ""}`;
+
+// Temporary keyword router. Replace with an LLM (Amazon Bedrock) later.
+async function handle(text) {
+  const [cmd, ...rest] = text.trim().split(/\s+/); const arg = rest.join(" ");
+  if (cmd === "add") {
+    const [title, subject, due_date, mins] = arg.split("|").map(s => s.trim());
+    return "Added: " + fmt(await callTool("add_task", { title, subject, due_date, est_minutes: +mins || 60 }));
+  }
+  if (cmd === "list") { const t = await callTool("list_tasks", {}); return t.length ? t.map(fmt).join("\n") : "No tasks yet. Try adding one."; }
+  if (cmd === "done") return "Done: " + fmt(await callTool("complete_task", { task_id: arg }));
+  if (cmd === "plan") {
+    const p = await callTool("plan_day", { available_minutes: +arg || 120 });
+    if (!p.plan.length) return "Nothing to plan. Add a task first.";
+    return `Plan for ${p.date} (${p.minutes_planned} min):\n` + p.plan.map(fmt).join("\n") +
+      (p.not_fitting_today.length ? `\nWon't fit today: ${p.not_fitting_today.join(", ")}` : "");
+  }
+  return "I understand: add, list, done, plan.";
+}
+
+async function send(text) {
+  say(text, "you");
+  try { say(await handle(text), "bot"); } catch (e) { say("Something went wrong: " + e.message, "bot"); }
+}
+document.getElementById("f").onsubmit = e => { e.preventDefault(); const q = document.getElementById("q"); if (q.value.trim()) send(q.value); q.value = ""; };
+document.querySelectorAll(".chips button").forEach(b => b.onclick = () => send(b.dataset.q));
+</script>
+</body>
+</html>
