@@ -37,7 +37,7 @@
   <div id="log" aria-live="polite"></div>
 </main>
 <form id="f"><div class="row">
-  <input id="q" autocomplete="off" aria-label="Message" placeholder="add title | subject | YYYY-MM-DD | minutes   ·   list   ·   plan 90   ·   done abc123">
+  <input id="q" autocomplete="off" aria-label="Message" placeholder="Try: I have a physics lab due Friday and 90 minutes tonight">
   <button>Send</button>
 </div></form>
 <script>
@@ -56,7 +56,7 @@ async function callTool(name, args) {
 
 const fmt = t => `[${t.id}] ${t.title} (${t.subject}) · due ${t.due_date} · ${t.est_minutes} min${t.done ? " ✓" : ""}`;
 
-// Temporary keyword router. Replace with an LLM (Amazon Bedrock) later.
+// Exact commands call tools directly; free text goes to /chat (Amazon Bedrock).
 async function handle(text) {
   const [cmd, ...rest] = text.trim().split(/\s+/); const arg = rest.join(" ");
   if (cmd === "add") {
@@ -71,7 +71,9 @@ async function handle(text) {
     return `Plan for ${p.date} (${p.minutes_planned} min):\n` + p.plan.map(fmt).join("\n") +
       (p.not_fitting_today.length ? `\nWon't fit today: ${p.not_fitting_today.join(", ")}` : "");
   }
-  return "I understand: add, list, done, plan.";
+  // Anything else: let Bedrock pick the tools
+  const r = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: text }) });
+  return (await r.json()).reply;
 }
 
 async function send(text) {

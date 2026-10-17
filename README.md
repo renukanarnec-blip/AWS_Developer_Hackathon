@@ -13,3 +13,8 @@ capture study tasks and plan the day. Built for the Amazon "Build, Ship, Shape" 
 
 ## Tools
 `add_task`, `list_tasks`, `complete_task`, `plan_day`
+
+## Natural language (Amazon Bedrock)
+    export AWS_REGION=us-east-1            # region where you enabled a model
+    export BEDROCK_MODEL_ID=<model ID or inference profile ID from the Bedrock console>
+    # plus AWS credentials (aws configure, or env vars)
