@@ -6,6 +6,7 @@ Simulator UI:  http://localhost:8000/
 """
 import asyncio
 import json
+import re
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -32,6 +33,26 @@ def _load() -> list[dict]:
 
 def _save(tasks: list[dict]) -> None:
     DB.write_text(json.dumps(tasks, indent=2))
+
+
+def _find(tasks: list[dict], ref: str) -> list[dict]:
+    """Match a task by exact id, or by part of its title (case-insensitive)."""
+    ref = (ref or "").strip().lower()
+    exact = [t for t in tasks if t["id"] == ref]
+    if exact or not ref:
+        return exact
+    return [t for t in tasks if ref in t["title"].lower()]
+
+
+def _pick(tasks: list[dict], ref: str):
+    """Return (task, error). Error explains no match or several matches."""
+    hits = _find(tasks, ref)
+    if not hits:
+        return None, {"error": f"No task matches '{ref}'. Use list_tasks to see the tasks."}
+    if len(hits) > 1:
+        return None, {"error": "Several tasks match: " + "; ".join(f"{t['title']} [{t['id']}]" for t in hits)
+                                + ". Ask the student which one, or use the id."}
+    return hits[0], None
 
 
 def _prefs() -> dict:
@@ -63,14 +84,14 @@ def list_tasks(include_done: bool = False) -> list[dict]:
 
 @mcp.tool()
 def complete_task(task_id: str) -> dict:
-    """Mark a task as done using its id."""
+    """Mark a task as done. task_id can be the task's id or its title (or part of the title)."""
     tasks = _load()
-    for t in tasks:
-        if t["id"] == task_id:
-            t["done"] = True
-            _save(tasks)
-            return t
-    return {"error": f"No task with id {task_id}"}
+    t, err = _pick(tasks, task_id)
+    if err:
+        return err
+    t["done"] = True
+    _save(tasks)
+    return t
 
 
 @mcp.tool()
@@ -93,31 +114,32 @@ def plan_day(available_minutes: int | None = None) -> dict:
 @mcp.tool()
 def update_task(task_id: str, title: str | None = None, due_date: str | None = None,
                 est_minutes: int | None = None) -> dict:
-    """Change a task's title, due date (YYYY-MM-DD) or estimated minutes. Only the fields given are changed."""
+    """Change a task's title, due date (YYYY-MM-DD) or estimated minutes. task_id can be the id or the
+    task's current title (or part of it). Only the fields given are changed."""
     tasks = _load()
-    for t in tasks:
-        if t["id"] == task_id:
-            if due_date:
-                datetime.strptime(due_date, "%Y-%m-%d")
-                t["due_date"] = due_date
-            if title:
-                t["title"] = title
-            if est_minutes:
-                t["est_minutes"] = est_minutes
-            _save(tasks)
-            return t
-    return {"error": f"No task with id {task_id}"}
+    t, err = _pick(tasks, task_id)
+    if err:
+        return err
+    if due_date:
+        datetime.strptime(due_date, "%Y-%m-%d")
+        t["due_date"] = due_date
+    if title:
+        t["title"] = title
+    if est_minutes:
+        t["est_minutes"] = est_minutes
+    _save(tasks)
+    return t
 
 
 @mcp.tool()
 def delete_task(task_id: str) -> dict:
-    """Permanently delete a task using its id."""
+    """Permanently delete a task. task_id can be the task's id or its title (or part of the title)."""
     tasks = _load()
-    kept = [t for t in tasks if t["id"] != task_id]
-    if len(kept) == len(tasks):
-        return {"error": f"No task with id {task_id}"}
-    _save(kept)
-    return {"deleted": task_id}
+    t, err = _pick(tasks, task_id)
+    if err:
+        return err
+    _save([x for x in tasks if x["id"] != t["id"]])
+    return {"deleted": t["title"]}
 
 
 @mcp.tool()
@@ -144,7 +166,10 @@ def reschedule_overdue(daily_minutes: int | None = None) -> dict:
 async def import_syllabus(text: str) -> dict:
     """Read pasted syllabus, course outline or list-of-deadlines text, extract every dated task using
     Amazon Bedrock, and add them all at once. Use this whenever the student pastes a syllabus or
-    several assignments and deadlines in one message."""
+    several assignments and deadlines in one message. Only pass text the student actually pasted;
+    never invent or guess syllabus content, and ask them to paste it if they have not."""
+    if len(text.strip()) < 40 or not re.search(r"\d", text):
+        return {"error": "No real syllabus text was provided. Ask the student to paste it."}
     if not MODEL_ID:
         return {"error": "BEDROCK_MODEL_ID is not set on the server."}
     try:
